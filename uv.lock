@@ -423,6 +423,36 @@ wheels = [
 ]
 
 [[package]]
+name = "lean-planning-mcp"
+version = "0.2.0"
+source = { editable = "." }
+dependencies = [
+    { name = "mcp", extra = ["cli"] },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+mpp = [
+    { name = "jpype1" },
+    { name = "mpxj" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jpype1", marker = "extra == 'mpp'", specifier = ">=1.5.0" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.4.1" },
+    { name = "mpxj", marker = "extra == 'mpp'", specifier = ">=14.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.1.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0" },
+]
+provides-extras = ["mpp", "dev"]
+
+[[package]]
 name = "markdown-it-py"
 version = "4.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -482,36 +512,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/67/52/264f4b7f439af5e7c
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2c/5d/89f17b91fbd8f91bf7ff425d217b4857a9681d0da6cbd89d951d72e46865/mpxj-16.1.0-py3-none-any.whl", hash = "sha256:7ad7526180812b11117ca08a4465df16c331330838352b9f0820857e53879eff", size = 31232691, upload-time = "2026-04-04T06:23:26.388Z" },
 ]
-
-[[package]]
-name = "msproject-lean-mcp"
-version = "0.2.0"
-source = { editable = "." }
-dependencies = [
-    { name = "mcp", extra = ["cli"] },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-]
-mpp = [
-    { name = "jpype1" },
-    { name = "mpxj" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "jpype1", marker = "extra == 'mpp'", specifier = ">=1.5.0" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.4.1" },
-    { name = "mpxj", marker = "extra == 'mpp'", specifier = ">=14.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.1.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0" },
-]
-provides-extras = ["mpp", "dev"]
 
 [[package]]
 name = "packaging"

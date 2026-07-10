@@ -19,7 +19,7 @@ from pathlib import Path
 
 import jpype
 
-from msproject_lean_mcp.mspdi import Assignment, Project, Resource, Task
+from lean_planning_mcp.mspdi import Assignment, Project, Resource, Task
 
 # Homebrew `openjdk` formula default (used only when JAVA_HOME is unset).
 _DEFAULT_MACOS_JAVA = "/opt/homebrew/opt/openjdk"
@@ -76,7 +76,7 @@ def _bool(value) -> bool:
 
 def parse_file(path: str | Path) -> Project:
     """Read a native ``.mpp`` (or anything mpxj's UniversalProjectReader handles)
-    and return a populated :class:`~msproject_lean_mcp.mspdi.Project`."""
+    and return a populated :class:`~lean_planning_mcp.mspdi.Project`."""
     _ensure_jvm()
     from org.mpxj import TimeUnit
     from org.mpxj.reader import UniversalProjectReader

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from msproject_lean_mcp import mspdi, server
+from lean_planning_mcp import mspdi, server
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.xml"
 

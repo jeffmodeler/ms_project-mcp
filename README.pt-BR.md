@@ -1,6 +1,6 @@
-# msproject-lean-mcp
+# lean-planning-mcp
 
-[![CI](https://github.com/jeffmodeler/msproject-lean-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/jeffmodeler/msproject-lean-mcp/actions/workflows/ci.yml)
+[![CI](https://github.com/jeffmodeler/lean-planning-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/jeffmodeler/lean-planning-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
@@ -62,15 +62,15 @@ igual independente do formato de origem**, pois operam sobre task UIDs.
 ### Opção A — `uv` (recomendada)
 
 ```bash
-git clone https://github.com/jeffmodeler/msproject-lean-mcp.git
-cd msproject-lean-mcp
+git clone https://github.com/jeffmodeler/lean-planning-mcp.git
+cd lean-planning-mcp
 uv sync
 ```
 
 ### Opção B — `pip`
 
 ```bash
-pip install git+https://github.com/jeffmodeler/msproject-lean-mcp.git
+pip install git+https://github.com/jeffmodeler/lean-planning-mcp.git
 ```
 
 Para suporte a `.mpp`:
@@ -78,7 +78,7 @@ Para suporte a `.mpp`:
 ```bash
 uv sync --extra mpp
 # ou
-pip install "msproject-lean-mcp[mpp] @ git+https://github.com/jeffmodeler/msproject-lean-mcp.git"
+pip install "lean-planning-mcp[mpp] @ git+https://github.com/jeffmodeler/lean-planning-mcp.git"
 ```
 
 ## Integração com Claude Desktop
@@ -88,13 +88,13 @@ Adicione ao seu `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "msproject-lean-mcp": {
+    "lean-planning-mcp": {
       "command": "uv",
       "args": [
         "--directory",
-        "C:\\caminho\\para\\msproject-lean-mcp",
+        "C:\\caminho\\para\\lean-planning-mcp",
         "run",
-        "msproject-lean-mcp"
+        "lean-planning-mcp"
       ]
     }
   }

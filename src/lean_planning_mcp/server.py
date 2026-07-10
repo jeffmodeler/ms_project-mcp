@@ -1,4 +1,4 @@
-"""msproject-lean-mcp: MCP server exposing Microsoft Project data as tools."""
+"""lean-planning-mcp: MCP server exposing Microsoft Project data as tools."""
 from __future__ import annotations
 
 import json
@@ -10,16 +10,16 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from msproject_lean_mcp import awp, lps, mspdi
-from msproject_lean_mcp.pbip_writer import PbipWriter
+from lean_planning_mcp import awp, lps, mspdi
+from lean_planning_mcp.pbip_writer import PbipWriter
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-logger = logging.getLogger("msproject-lean-mcp")
+logger = logging.getLogger("lean-planning-mcp")
 
-mcp = FastMCP("msproject-lean-mcp")
+mcp = FastMCP("lean-planning-mcp")
 
 _state: dict[str, mspdi.Project | None] = {"project": None}
 
@@ -45,7 +45,7 @@ _UNIVERSAL_SUFFIXES = (".mpp", ".mpx", ".xer", ".pmxml", ".sp", ".pp")
 
 _MPP_EXTRA_ERROR = (
     "This format requires the optional 'mpp' extra (mpxj + Java). "
-    "Install with: uv pip install 'msproject-lean-mcp[mpp]' — or export the "
+    "Install with: uv pip install 'lean-planning-mcp[mpp]' — or export the "
     "schedule as Microsoft Project MSPDI XML and load the .xml instead."
 )
 
@@ -53,7 +53,7 @@ _MPP_EXTRA_ERROR = (
 def _load_universal(file_path: Path) -> mspdi.Project | dict:
     """Load any mpxj-supported format. Returns a Project or an error dict."""
     try:
-        from msproject_lean_mcp import mpp_loader  # type: ignore
+        from lean_planning_mcp import mpp_loader  # type: ignore
     except ImportError:
         return {"error": _MPP_EXTRA_ERROR}
     try:

@@ -28,7 +28,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from msproject_lean_mcp import mspdi, sidecar
+from lean_planning_mcp import mspdi, sidecar
 
 logger = logging.getLogger(__name__)
 

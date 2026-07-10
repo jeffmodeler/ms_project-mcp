@@ -23,7 +23,7 @@ jobs:
       - name: Run ruff
         run: uv run ruff check src tests
       - name: Run pytest
-        run: uv run pytest -v --cov=msproject_lean_mcp --cov-report=term-missing
+        run: uv run pytest -v --cov=lean_planning_mcp --cov-report=term-missing
 
   mpp-import-check:
     runs-on: ubuntu-latest
@@ -43,7 +43,7 @@ jobs:
       - name: Import mpp_loader and start the JVM
         run: |
           uv run python -c "
-          from msproject_lean_mcp import mpp_loader
+          from lean_planning_mcp import mpp_loader
           mpp_loader._ensure_jvm()
           from org.mpxj.reader import UniversalProjectReader
           UniversalProjectReader()

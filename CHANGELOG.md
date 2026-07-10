@@ -55,12 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Renamed project `project-mcp` → `msproject-lean-mcp`** to reflect what
-  the server actually does: Microsoft Project schedules + Lean construction
-  planning (AWP/LPS). Renames the GitHub repo (old URLs redirect), the PyPI
-  package name, the Python package (`project_mcp` → `msproject_lean_mcp`),
-  the console script, and the FastMCP server name. Update your
-  `claude_desktop_config.json` entry accordingly.
+- **Renamed project `project-mcp` → `msproject-lean-mcp` → `lean-planning-mcp`.**
+  The first rename reflected the Lean layers; the second landed with
+  multi-platform loading (Primavera P6, Synchro, Asta) making the
+  "msproject" prefix too narrow. Renames the GitHub repo (all old URLs
+  redirect), the PyPI package name, the Python package
+  (`project_mcp` → `lean_planning_mcp`), the console script, and the
+  FastMCP server name. Update your `claude_desktop_config.json` entry
+  accordingly.
 - `awp_generate_iwps`: default cap raised from 40h to 500h (CII sizing — 1-2
   weeks for one crew); stamps `discipline`/`crew` on IWPs; **no longer
   destroys released/complete IWPs on regeneration** (only `planned` IWPs are
