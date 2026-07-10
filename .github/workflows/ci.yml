@@ -23,4 +23,4 @@ jobs:
       - name: Run ruff
         run: uv run ruff check src tests
       - name: Run pytest
-        run: uv run pytest -v
+        run: uv run pytest -v --cov=project_mcp --cov-report=term-missing
