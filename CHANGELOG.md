@@ -5,6 +5,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — AWP conceptual gaps closed (CII RT-272/RT-319)
+
+- **EWP/PWP layer** (`awp_upsert_ewp`, `awp_list_ewp`, `awp_upsert_pwp`,
+  `awp_list_pwp`): Engineering and Procurement Work Packages linked to CWPs,
+  completing the E-P-C alignment. `awp_readiness_check` now also requires all
+  linked EWPs `issued` and PWPs `delivered`, and stores the result on the CWP.
+- **Constraint-free release gate** (`awp_release_iwp`): IWPs can only be
+  released to the field after the parent CWP passes a readiness check —
+  the WorkFace Planning golden rule.
+- **IWP field progress** (`awp_update_iwp_progress`): 0-100% with earned
+  hours (AWP earned-value signal); 100% marks the IWP complete. Requires the
+  IWP to be released first.
+- **Manual Path of Construction** (`awp_set_path_of_construction`): the PoC
+  is now a planning input decided by the construction team;
+  `awp_path_of_construction` reports `mode: planned` vs
+  `derived-from-schedule`.
+
+### Added — LPS conceptual gaps closed (Ballard / Lean Construction)
+
+- **Shielding production**: `lps_add_commitment` now rejects tasks with open
+  constraints (override via `allow_constrained=true`, recorded as risk on the
+  commitment). ISO-week format is validated.
+- **TA/TMR reliability metrics** (`lps_snapshot_lookahead`,
+  `lps_reliability`): lookahead snapshots enable Tasks Anticipated and Tasks
+  Made Ready series — measuring make-ready health, not just weekly PPC.
+- **Late-constraint alert**: `lps_lookahead` flags constraints whose
+  `due_date` falls after the task start (`late_constraint_ids`).
+- **Daily huddle (level 5)** (`lps_log_daily`, `lps_get_daily_log`): daily
+  entries against committed tasks with early blocker surfacing.
+- **Workable backlog** (`lps_workable_backlog`): ready-but-uncommitted tasks
+  as the week's fallback buffer.
+- **Pull-plan handoffs** (`lps_annotate_pull_plan`): handoff recipient and
+  conditions of satisfaction per pull-plan entry.
+- **Corrective action**: `lps_mark_complete` accepts `corrective_action`,
+  closing the PDCA loop on variances.
+
+### Changed
+
+- `awp_generate_iwps`: default cap raised from 40h to 500h (CII sizing — 1-2
+  weeks for one crew); stamps `discipline`/`crew` on IWPs; **no longer
+  destroys released/complete IWPs on regeneration** (only `planned` IWPs are
+  regrouped; locked tasks are excluded).
+- Tool count: 36 → 49 (14 core + 17 AWP + 18 LPS).
+- README (EN/PT-BR): documented that AWP and LPS are deliberately separate
+  layers over the same schedule (separate sidecars, no shared state).
+
 ### Fixed
 
 - Corrected all repo URLs (CI badge, `git clone`/`pip install` snippets,

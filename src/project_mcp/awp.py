@@ -1,10 +1,19 @@
-"""Advanced Work Packaging (AWP) — CII methodology.
+"""Advanced Work Packaging (AWP) — CII methodology (RT-272 / RT-319).
 
-Domain model and tool implementations for:
+Domain model and tool implementations for the full E-P-C alignment:
 
     CWA (Construction Work Area)  →  CWP (Construction Work Package)
                                           ↓
                                      IWP (Installation Work Package)
+
+    EWP (Engineering Work Package)  ─┐
+                                     ├→ feed CWP readiness
+    PWP (Procurement Work Package)  ─┘
+
+EWPs and PWPs are linked to CWPs: a CWP is only ready when its engineering
+deliverables are issued and its procurement packages are delivered on-site.
+IWPs can only be *released* to the field after a passing readiness check
+(constraint-free release — the WorkFace Planning golden rule).
 
 Metadata is persisted in the project sidecar folder (see `sidecar.py`). The
 `.mpp`/`.xml` schedule remains untouched — tasks are linked to CWPs via their
@@ -16,6 +25,7 @@ cleanly to JSON for MCP tool responses.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from project_mcp import mspdi, sidecar
@@ -24,6 +34,12 @@ logger = logging.getLogger(__name__)
 
 VALID_CWP_STATUS = {"planned", "ready", "in-progress", "complete", "on-hold"}
 VALID_IWP_STATUS = {"planned", "ready", "released", "complete"}
+VALID_EWP_STATUS = {"planned", "in-progress", "issued"}
+VALID_PWP_STATUS = {"planned", "ordered", "delivered"}
+
+# CII guidance: an IWP is 1-2 weeks of work for a single crew — typically
+# 500-1000 field hours. 40h would be a single-person week, far too small.
+DEFAULT_IWP_HOURS = 500.0
 
 
 def _find_cwa(payload: dict[str, Any], cwa_id: str) -> dict[str, Any] | None:
@@ -32,6 +48,18 @@ def _find_cwa(payload: dict[str, Any], cwa_id: str) -> dict[str, Any] | None:
 
 def _find_cwp(payload: dict[str, Any], cwp_id: str) -> dict[str, Any] | None:
     return next((c for c in payload["cwp"] if c["id"] == cwp_id), None)
+
+
+def _find_iwp(payload: dict[str, Any], iwp_id: str) -> dict[str, Any] | None:
+    return next((i for i in payload["iwp"] if i["id"] == iwp_id), None)
+
+
+def _find_ewp(payload: dict[str, Any], ewp_id: str) -> dict[str, Any] | None:
+    return next((e for e in payload["ewp"] if e["id"] == ewp_id), None)
+
+
+def _find_pwp(payload: dict[str, Any], pwp_id: str) -> dict[str, Any] | None:
+    return next((p for p in payload["pwp"] if p["id"] == pwp_id), None)
 
 
 def _task_to_cwp_map(payload: dict[str, Any]) -> dict[int, str]:
@@ -215,8 +243,13 @@ def readiness_check(
 ) -> dict[str, Any]:
     """Check whether a CWP has all requirements available.
 
-    The `available_*` arguments represent what is currently on-site / approved.
-    Typically provided by the LLM based on procurement/document status.
+    Verifies three things:
+      1. Manual requirements (materials/documents/access) against `available_*`
+      2. All linked EWPs have status 'issued' (engineering complete)
+      3. All linked PWPs have status 'delivered' (materials on-site)
+
+    The result is stored on the CWP as `last_readiness` — it is the gate that
+    `release_iwp` checks before allowing field release.
     """
     if project.source_path is None:
         return {"error": "Project has no source_path; load_project first."}
@@ -236,28 +269,182 @@ def readiness_check(
         lack = sorted(needed - avail[key])
         if lack:
             missing[key] = lack
+
+    # E-P alignment: engineering must be issued, procurement delivered
+    pending_ewp = sorted(
+        e["id"] for e in payload["ewp"]
+        if e.get("cwp_id") == cwp_id and e.get("status") != "issued"
+    )
+    pending_pwp = sorted(
+        p["id"] for p in payload["pwp"]
+        if p.get("cwp_id") == cwp_id and p.get("status") != "delivered"
+    )
+    if pending_ewp:
+        missing["engineering"] = pending_ewp
+    if pending_pwp:
+        missing["procurement"] = pending_pwp
+
     is_ready = not missing
+    cwp["last_readiness"] = {
+        "ready": is_ready,
+        "missing": missing,
+        "checked_at": datetime.now(UTC).isoformat(),
+    }
+    sidecar.save_awp(project.source_path, payload)
     return {
         "cwp_id": cwp_id,
         "ready": is_ready,
         "missing": missing,
         "requirements": reqs,
+        "linked_ewp_pending": pending_ewp,
+        "linked_pwp_pending": pending_pwp,
     }
+
+
+# ------------------------------------------------------------ EWP/PWP tools
+
+
+def upsert_ewp(
+    project: mspdi.Project,
+    ewp_id: str,
+    name: str,
+    cwp_id: str,
+    discipline: str | None = None,
+    status: str = "planned",
+    issue_date: str | None = None,
+) -> dict[str, Any]:
+    """Create or update an Engineering Work Package linked to a CWP.
+
+    EWPs represent engineering deliverables (drawings, specs, models) that
+    must be issued before the CWP can be released to the field.
+    """
+    if project.source_path is None:
+        return {"error": "Project has no source_path; load_project first."}
+    if status not in VALID_EWP_STATUS:
+        return {"error": f"Invalid status '{status}'. Valid: {sorted(VALID_EWP_STATUS)}"}
+    payload = sidecar.load_awp(project.source_path)
+    if _find_cwp(payload, cwp_id) is None:
+        return {"error": f"CWP '{cwp_id}' does not exist. Create it first with upsert_cwp."}
+    existing = _find_ewp(payload, ewp_id)
+    record = {
+        "id": ewp_id,
+        "name": name,
+        "cwp_id": cwp_id,
+        "discipline": discipline,
+        "status": status,
+        "issue_date": issue_date,
+    }
+    if existing is None:
+        payload["ewp"].append(record)
+        action = "created"
+    else:
+        existing.update(record)
+        record = existing
+        action = "updated"
+    sidecar.save_awp(project.source_path, payload)
+    return {"action": action, "ewp": record}
+
+
+def list_ewp(project: mspdi.Project, cwp_id: str | None = None) -> dict[str, Any]:
+    """List Engineering Work Packages, optionally filtered by CWP."""
+    if project.source_path is None:
+        return {"error": "Project has no source_path; load_project first."}
+    payload = sidecar.load_awp(project.source_path)
+    items = payload["ewp"]
+    if cwp_id:
+        items = [e for e in items if e.get("cwp_id") == cwp_id]
+    return {"count": len(items), "ewp": items}
+
+
+def upsert_pwp(
+    project: mspdi.Project,
+    pwp_id: str,
+    name: str,
+    cwp_id: str,
+    materials: list[str] | None = None,
+    status: str = "planned",
+    required_on_site: str | None = None,
+) -> dict[str, Any]:
+    """Create or update a Procurement Work Package linked to a CWP.
+
+    PWPs represent purchased materials/equipment that must be delivered
+    on-site before the CWP can be released to the field.
+    """
+    if project.source_path is None:
+        return {"error": "Project has no source_path; load_project first."}
+    if status not in VALID_PWP_STATUS:
+        return {"error": f"Invalid status '{status}'. Valid: {sorted(VALID_PWP_STATUS)}"}
+    payload = sidecar.load_awp(project.source_path)
+    if _find_cwp(payload, cwp_id) is None:
+        return {"error": f"CWP '{cwp_id}' does not exist. Create it first with upsert_cwp."}
+    existing = _find_pwp(payload, pwp_id)
+    record = {
+        "id": pwp_id,
+        "name": name,
+        "cwp_id": cwp_id,
+        "materials": materials or [],
+        "status": status,
+        "required_on_site": required_on_site,
+    }
+    if existing is None:
+        payload["pwp"].append(record)
+        action = "created"
+    else:
+        if materials is None:
+            record["materials"] = existing.get("materials", [])
+        existing.update(record)
+        record = existing
+        action = "updated"
+    sidecar.save_awp(project.source_path, payload)
+    return {"action": action, "pwp": record}
+
+
+def list_pwp(project: mspdi.Project, cwp_id: str | None = None) -> dict[str, Any]:
+    """List Procurement Work Packages, optionally filtered by CWP."""
+    if project.source_path is None:
+        return {"error": "Project has no source_path; load_project first."}
+    payload = sidecar.load_awp(project.source_path)
+    items = payload["pwp"]
+    if cwp_id:
+        items = [p for p in items if p.get("cwp_id") == cwp_id]
+    return {"count": len(items), "pwp": items}
 
 
 # ---------------------------------------------------------- Path of construction
 
 
+def set_path_of_construction(
+    project: mspdi.Project, cwp_ids: list[str]
+) -> dict[str, Any]:
+    """Define the Path of Construction as a *planning input*.
+
+    In AWP the PoC is decided by the construction team and drives engineering
+    and procurement priorities — it is not derived from the schedule. Pass
+    CWP ids in the order construction intends to execute. Once set,
+    `path_of_construction` returns this sequence (mode 'planned') instead of
+    the schedule-derived fallback.
+    """
+    if project.source_path is None:
+        return {"error": "Project has no source_path; load_project first."}
+    payload = sidecar.load_awp(project.source_path)
+    unknown = [cid for cid in cwp_ids if _find_cwp(payload, cid) is None]
+    if unknown:
+        return {"error": f"Unknown CWP ids: {unknown}. Create them first with upsert_cwp."}
+    payload["poc"] = list(cwp_ids)
+    sidecar.save_awp(project.source_path, payload)
+    return {"poc_set": True, "sequence": cwp_ids, "count": len(cwp_ids)}
+
+
 def path_of_construction(project: mspdi.Project) -> dict[str, Any]:
-    """Compute the ideal execution sequence of CWPs based on task dependencies.
+    """Return the Path of Construction — the CWP execution sequence.
 
-    For each CWP, aggregates:
-      - Earliest start among its tasks
-      - Latest finish among its tasks
-      - Whether any task is on the critical path
-      - Total duration (sum of tasks, in hours)
+    If a manual PoC was defined via `set_path_of_construction`, that order is
+    used (mode 'planned' — the true AWP PoC, a planning input). Otherwise the
+    sequence is derived from the schedule sorted by earliest task start
+    (mode 'derived-from-schedule' — a fallback report, not a real PoC).
 
-    Then sorts by earliest start.
+    For each CWP, aggregates earliest start, latest finish, total hours and
+    critical-path exposure.
     """
     if project.source_path is None:
         return {"error": "Project has no source_path; load_project first."}
@@ -291,8 +478,15 @@ def path_of_construction(project: mspdi.Project) -> dict[str, Any]:
             "critical_task_count": critical_count,
             "on_critical_path": critical_count > 0,
         })
-    result.sort(key=lambda r: (r.get("earliest_start") or "9999"))
-    return {"count": len(result), "sequence": result}
+    manual_poc: list[str] = payload.get("poc", [])
+    if manual_poc:
+        order = {cid: i for i, cid in enumerate(manual_poc)}
+        result.sort(key=lambda r: order.get(r["cwp_id"], len(order)))
+        mode = "planned"
+    else:
+        result.sort(key=lambda r: (r.get("earliest_start") or "9999"))
+        mode = "derived-from-schedule"
+    return {"count": len(result), "mode": mode, "sequence": result}
 
 
 # ---------------------------------------------------------------- IWP tools
@@ -301,13 +495,22 @@ def path_of_construction(project: mspdi.Project) -> dict[str, Any]:
 def generate_iwps(
     project: mspdi.Project,
     cwp_id: str,
-    max_hours_per_iwp: float = 40.0,
+    max_hours_per_iwp: float = DEFAULT_IWP_HOURS,
+    discipline: str | None = None,
+    crew: str | None = None,
 ) -> dict[str, Any]:
     """Split a CWP into IWPs (Installation Work Packages) sized by labor hours.
 
     Walks the CWP's tasks in schedule order and groups them into IWPs such
-    that no IWP exceeds `max_hours_per_iwp` (default: one work-week). Any
-    task already larger than the cap becomes a standalone IWP.
+    that no IWP exceeds `max_hours_per_iwp` (default 500h — CII sizing: 1-2
+    weeks of work for one crew). Any task already larger than the cap becomes
+    a standalone IWP.
+
+    `discipline` and `crew` are stamped on every generated IWP — an IWP
+    should always be single-discipline, single-crew, single-work-front.
+
+    Only IWPs still in 'planned' status are regenerated. IWPs already ready,
+    released or complete are preserved, and their tasks are not regrouped.
     """
     if project.source_path is None:
         return {"error": "Project has no source_path; load_project first."}
@@ -315,12 +518,27 @@ def generate_iwps(
     cwp = _find_cwp(payload, cwp_id)
     if cwp is None:
         return {"error": f"CWP '{cwp_id}' does not exist."}
+
+    # Protect IWPs that already left the planning stage
+    preserved = [
+        i for i in payload["iwp"]
+        if i.get("cwp_id") == cwp_id and i.get("status") != "planned"
+    ]
+    locked_uids = {int(u) for i in preserved for u in i.get("task_uids", [])}
+
     tasks = [project.task_by_uid(uid) for uid in cwp.get("task_uids", [])]
-    tasks = [t for t in tasks if t is not None]
+    tasks = [t for t in tasks if t is not None and t.uid not in locked_uids]
     if not tasks:
+        if preserved:
+            return {
+                "cwp_id": cwp_id, "iwp_count": 0, "iwp": [],
+                "preserved_count": len(preserved),
+                "note": "All tasks belong to IWPs already ready/released/complete.",
+            }
         return {"error": f"CWP '{cwp_id}' has no tasks assigned."}
     tasks.sort(key=lambda t: (t.start or "9999", t.id))
 
+    existing_ids = {i["id"] for i in payload["iwp"]}
     iwps: list[dict[str, Any]] = []
     current_uids: list[int] = []
     current_hours = 0.0
@@ -328,30 +546,139 @@ def generate_iwps(
     for task in tasks:
         hours = task.duration_hours or 0.0
         if current_uids and current_hours + hours > max_hours_per_iwp:
-            iwps.append(_make_iwp(cwp_id, seq, current_uids, current_hours))
+            iwps.append(_make_iwp(cwp_id, seq, current_uids, current_hours,
+                                  discipline, crew, existing_ids))
             seq += 1
             current_uids = []
             current_hours = 0.0
         current_uids.append(task.uid)
         current_hours += hours
     if current_uids:
-        iwps.append(_make_iwp(cwp_id, seq, current_uids, current_hours))
+        iwps.append(_make_iwp(cwp_id, seq, current_uids, current_hours,
+                              discipline, crew, existing_ids))
 
-    # Replace any existing IWPs for this CWP
-    payload["iwp"] = [i for i in payload["iwp"] if i.get("cwp_id") != cwp_id]
+    # Replace only the 'planned' IWPs for this CWP; keep everything else
+    payload["iwp"] = [
+        i for i in payload["iwp"]
+        if i.get("cwp_id") != cwp_id or i.get("status") != "planned"
+    ]
     payload["iwp"].extend(iwps)
     sidecar.save_awp(project.source_path, payload)
-    return {"cwp_id": cwp_id, "iwp_count": len(iwps), "iwp": iwps}
-
-
-def _make_iwp(cwp_id: str, seq: int, task_uids: list[int], hours: float) -> dict[str, Any]:
     return {
-        "id": f"IWP-{cwp_id.replace('CWP-', '')}.{seq:03d}",
+        "cwp_id": cwp_id,
+        "iwp_count": len(iwps),
+        "iwp": iwps,
+        "preserved_count": len(preserved),
+        "preserved": [i["id"] for i in preserved],
+    }
+
+
+def _make_iwp(
+    cwp_id: str,
+    seq: int,
+    task_uids: list[int],
+    hours: float,
+    discipline: str | None,
+    crew: str | None,
+    existing_ids: set[str],
+) -> dict[str, Any]:
+    base = f"IWP-{cwp_id.replace('CWP-', '')}"
+    iwp_id = f"{base}.{seq:03d}"
+    while iwp_id in existing_ids:
+        seq += 1
+        iwp_id = f"{base}.{seq:03d}"
+    existing_ids.add(iwp_id)
+    return {
+        "id": iwp_id,
         "cwp_id": cwp_id,
         "task_uids": task_uids,
         "labor_hours": round(hours, 2),
+        "discipline": discipline,
+        "crew": crew,
         "status": "planned",
+        "percent_complete": 0,
+        "earned_hours": 0.0,
+        "released_date": None,
     }
+
+
+def release_iwp(project: mspdi.Project, iwp_id: str) -> dict[str, Any]:
+    """Release an IWP to the field — gated on a passing CWP readiness check.
+
+    WorkFace Planning golden rule: an IWP only goes to the field 100%
+    constraint-free. This tool refuses to release unless the parent CWP's
+    last `readiness_check` passed (ready=true). Run `awp_readiness_check`
+    first, clear what's missing, then release.
+    """
+    if project.source_path is None:
+        return {"error": "Project has no source_path; load_project first."}
+    payload = sidecar.load_awp(project.source_path)
+    iwp = _find_iwp(payload, iwp_id)
+    if iwp is None:
+        return {"error": f"IWP '{iwp_id}' does not exist."}
+    if iwp.get("status") == "released":
+        return {"already_released": True, "iwp": iwp}
+    if iwp.get("status") == "complete":
+        return {"error": f"IWP '{iwp_id}' is already complete."}
+    cwp = _find_cwp(payload, iwp.get("cwp_id", ""))
+    if cwp is None:
+        return {"error": f"Parent CWP '{iwp.get('cwp_id')}' not found."}
+    last = cwp.get("last_readiness")
+    if last is None:
+        return {
+            "released": False,
+            "error": "No readiness check on record for the parent CWP. "
+                     "Run awp_readiness_check first — IWPs are only released constraint-free.",
+        }
+    if not last.get("ready"):
+        return {
+            "released": False,
+            "error": "Parent CWP failed its last readiness check. Clear the missing "
+                     "items and re-run awp_readiness_check before releasing.",
+            "missing": last.get("missing", {}),
+            "checked_at": last.get("checked_at"),
+        }
+    iwp["status"] = "released"
+    iwp["released_date"] = datetime.now(UTC).date().isoformat()
+    sidecar.save_awp(project.source_path, payload)
+    return {"released": True, "iwp": iwp, "readiness_checked_at": last.get("checked_at")}
+
+
+def update_iwp_progress(
+    project: mspdi.Project,
+    iwp_id: str,
+    percent_complete: int,
+    earned_hours: float | None = None,
+) -> dict[str, Any]:
+    """Update field progress on an IWP. At 100% the IWP is marked complete.
+
+    Progress at IWP level is the AWP earned-value signal: completed IWPs ×
+    their labor_hours = earned hours for the CWP.
+    """
+    if project.source_path is None:
+        return {"error": "Project has no source_path; load_project first."}
+    if not 0 <= percent_complete <= 100:
+        return {"error": "percent_complete must be between 0 and 100."}
+    payload = sidecar.load_awp(project.source_path)
+    iwp = _find_iwp(payload, iwp_id)
+    if iwp is None:
+        return {"error": f"IWP '{iwp_id}' does not exist."}
+    if iwp.get("status") == "planned":
+        return {
+            "error": f"IWP '{iwp_id}' has not been released. "
+                     "Release it first with awp_release_iwp.",
+        }
+    iwp["percent_complete"] = percent_complete
+    if earned_hours is not None:
+        iwp["earned_hours"] = round(earned_hours, 2)
+    else:
+        iwp["earned_hours"] = round(
+            iwp.get("labor_hours", 0.0) * percent_complete / 100, 2
+        )
+    if percent_complete == 100:
+        iwp["status"] = "complete"
+    sidecar.save_awp(project.source_path, payload)
+    return {"updated": True, "iwp": iwp}
 
 
 # ---------------------------------------------------------------- Work Package Release

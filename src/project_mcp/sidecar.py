@@ -55,6 +55,9 @@ def default_awp_payload(project_path: str | Path) -> dict[str, Any]:
         "cwa": [],
         "cwp": [],
         "iwp": [],
+        "ewp": [],
+        "pwp": [],
+        "poc": [],
     }
 
 
@@ -70,7 +73,7 @@ def load_awp(project_path: str | Path) -> dict[str, Any]:
         logger.warning("failed to read %s: %s — returning empty payload", path, exc)
         return default_awp_payload(project_path)
     # Forward compatibility: ensure required keys exist
-    for key in ("cwa", "cwp", "iwp"):
+    for key in ("cwa", "cwp", "iwp", "ewp", "pwp", "poc"):
         data.setdefault(key, [])
     data.setdefault("version", SIDECAR_VERSION)
     data.setdefault("project_source", Path(project_path).name)
@@ -105,6 +108,7 @@ def default_lps_payload(project_path: str | Path) -> dict[str, Any]:
         "phases": [],
         "constraints": [],
         "weekly_work_plans": [],
+        "lookahead_snapshots": [],
     }
 
 
@@ -119,7 +123,7 @@ def load_lps(project_path: str | Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("failed to read %s: %s — returning empty payload", path, exc)
         return default_lps_payload(project_path)
-    for key in ("phases", "constraints", "weekly_work_plans"):
+    for key in ("phases", "constraints", "weekly_work_plans", "lookahead_snapshots"):
         data.setdefault(key, [])
     data.setdefault("version", SIDECAR_VERSION)
     data.setdefault("project_source", Path(project_path).name)

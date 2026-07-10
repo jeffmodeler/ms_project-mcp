@@ -727,8 +727,9 @@ def awp_readiness_check(
 ) -> str:
     """Check whether a CWP has all requirements available to start.
 
-    Pass what is currently on-site / approved via the `available_*` arguments.
-    Returns `ready: true` only when no required items are missing.
+    Verifies manual requirements (pass what is on-site via `available_*`),
+    plus E-P alignment: all linked EWPs must be 'issued' and all linked PWPs
+    'delivered'. The result is stored on the CWP and gates `awp_release_iwp`.
     """
     return _serialize(
         awp.readiness_check(
@@ -739,25 +740,139 @@ def awp_readiness_check(
 
 
 @mcp.tool()
-def awp_path_of_construction() -> str:
-    """Compute the ideal execution sequence of CWPs.
+def awp_upsert_ewp(
+    ewp_id: str,
+    name: str,
+    cwp_id: str,
+    discipline: str | None = None,
+    status: str = "planned",
+    issue_date: str | None = None,
+) -> str:
+    """Create or update an Engineering Work Package linked to a CWP.
 
-    For each CWP, aggregates earliest start, latest finish, total hours,
-    critical-task count, then sorts by earliest start. Returns the "path of
-    construction" — which CWPs feed which, and when each should execute.
+    EWPs are the engineering deliverables (drawings, specs, models) feeding a
+    CWP. A CWP is only ready when all its EWPs are 'issued'.
+
+    Args:
+        ewp_id: Stable identifier (e.g. "EWP-01.01").
+        name: Deliverable name (e.g. "Fôrmas Bloco A — IFC drawings").
+        cwp_id: Parent CWP — must already exist.
+        discipline: Engineering discipline (e.g. "civil", "piping").
+        status: planned | in-progress | issued.
+        issue_date: ISO date the package was/will be issued.
+    """
+    return _serialize(
+        awp.upsert_ewp(_project(), ewp_id, name, cwp_id, discipline, status, issue_date)
+    )
+
+
+@mcp.tool()
+def awp_list_ewp(cwp_id: str | None = None) -> str:
+    """List Engineering Work Packages, optionally filtered by CWP."""
+    return _serialize(awp.list_ewp(_project(), cwp_id))
+
+
+@mcp.tool()
+def awp_upsert_pwp(
+    pwp_id: str,
+    name: str,
+    cwp_id: str,
+    materials: list[str] | None = None,
+    status: str = "planned",
+    required_on_site: str | None = None,
+) -> str:
+    """Create or update a Procurement Work Package linked to a CWP.
+
+    PWPs are purchased materials/equipment feeding a CWP. A CWP is only
+    ready when all its PWPs are 'delivered'.
+
+    Args:
+        pwp_id: Stable identifier (e.g. "PWP-01.01").
+        name: Package name (e.g. "Aço CA-50 Bloco A").
+        cwp_id: Parent CWP — must already exist.
+        materials: List of material descriptions in the package.
+        status: planned | ordered | delivered.
+        required_on_site: ISO date the materials must be on-site.
+    """
+    return _serialize(
+        awp.upsert_pwp(_project(), pwp_id, name, cwp_id, materials, status, required_on_site)
+    )
+
+
+@mcp.tool()
+def awp_list_pwp(cwp_id: str | None = None) -> str:
+    """List Procurement Work Packages, optionally filtered by CWP."""
+    return _serialize(awp.list_pwp(_project(), cwp_id))
+
+
+@mcp.tool()
+def awp_set_path_of_construction(cwp_ids: list[str]) -> str:
+    """Define the Path of Construction as a planning input (true AWP PoC).
+
+    Pass CWP ids in the order the construction team decided to execute.
+    This order then drives `awp_path_of_construction` (mode 'planned') and
+    should drive engineering/procurement priorities.
+    """
+    return _serialize(awp.set_path_of_construction(_project(), cwp_ids))
+
+
+@mcp.tool()
+def awp_path_of_construction() -> str:
+    """Return the Path of Construction — the CWP execution sequence.
+
+    Uses the manual sequence from `awp_set_path_of_construction` when defined
+    (mode 'planned'); otherwise falls back to schedule order by earliest task
+    start (mode 'derived-from-schedule'). Each CWP is enriched with earliest
+    start, latest finish, total hours and critical-path exposure.
     """
     return _serialize(awp.path_of_construction(_project()))
 
 
 @mcp.tool()
-def awp_generate_iwps(cwp_id: str, max_hours_per_iwp: float = 40.0) -> str:
+def awp_generate_iwps(
+    cwp_id: str,
+    max_hours_per_iwp: float = 500.0,
+    discipline: str | None = None,
+    crew: str | None = None,
+) -> str:
     """Split a CWP into IWPs sized by labor hours.
 
-    Walks the CWP's tasks in schedule order and groups them so no IWP exceeds
-    `max_hours_per_iwp` (default: one 40h work-week). Tasks larger than the
-    cap become standalone IWPs. Existing IWPs for this CWP are replaced.
+    Groups the CWP's tasks in schedule order so no IWP exceeds
+    `max_hours_per_iwp` (default 500h — CII sizing: 1-2 weeks for one crew).
+    Stamp `discipline` and `crew` so each IWP stays single-discipline,
+    single-crew. Only 'planned' IWPs are regenerated — IWPs already ready,
+    released or complete are preserved untouched.
     """
-    return _serialize(awp.generate_iwps(_project(), cwp_id, max_hours_per_iwp))
+    return _serialize(
+        awp.generate_iwps(_project(), cwp_id, max_hours_per_iwp, discipline, crew)
+    )
+
+
+@mcp.tool()
+def awp_release_iwp(iwp_id: str) -> str:
+    """Release an IWP to the field — gated on constraint-free readiness.
+
+    Refuses to release unless the parent CWP's last `awp_readiness_check`
+    passed (WorkFace Planning golden rule: IWPs go to the field 100%
+    constraint-free). Run the readiness check first.
+    """
+    return _serialize(awp.release_iwp(_project(), iwp_id))
+
+
+@mcp.tool()
+def awp_update_iwp_progress(
+    iwp_id: str,
+    percent_complete: int,
+    earned_hours: float | None = None,
+) -> str:
+    """Update field progress on a released IWP (0-100%).
+
+    At 100% the IWP is marked complete. If `earned_hours` is omitted it is
+    derived from labor_hours × percent — the AWP earned-value signal.
+    """
+    return _serialize(
+        awp.update_iwp_progress(_project(), iwp_id, percent_complete, earned_hours)
+    )
 
 
 @mcp.tool()
@@ -822,6 +937,26 @@ def lps_get_pull_plan(phase_id: str) -> str:
 
 
 @mcp.tool()
+def lps_annotate_pull_plan(
+    phase_id: str,
+    task_uid: int,
+    handoff_to: str | None = None,
+    conditions_of_satisfaction: str | None = None,
+) -> str:
+    """Annotate a pull-plan entry with handoff and conditions of satisfaction.
+
+    Pull planning is a network of promises: record who receives the work
+    (`handoff_to`) and what "done" means for the handoff
+    (`conditions_of_satisfaction`), as agreed in the pull-planning session.
+    """
+    return _serialize(
+        lps.annotate_pull_plan(
+            _project(), phase_id, task_uid, handoff_to, conditions_of_satisfaction
+        )
+    )
+
+
+@mcp.tool()
 def lps_register_constraint(
     task_uid: int,
     constraint_type: str,
@@ -875,6 +1010,8 @@ def lps_lookahead(weeks: int = 6, from_date: str | None = None) -> str:
 
     Classic LPS lookahead — answers "what's coming, and what's blocking it?".
     Tasks marked as ready (no open constraints) can be committed to a WWP.
+    Constraints whose due_date falls *after* the task start are flagged in
+    `late_constraint_ids` — the make-ready process is running late on them.
 
     Args:
         weeks: Horizon in weeks (default 6).
@@ -884,22 +1021,42 @@ def lps_lookahead(weeks: int = 6, from_date: str | None = None) -> str:
 
 
 @mcp.tool()
+def lps_snapshot_lookahead(weeks: int = 6, from_date: str | None = None) -> str:
+    """Persist a lookahead snapshot — enables TA/TMR reliability metrics.
+
+    Call at every weekly lookahead review. Snapshots record which tasks were
+    anticipated and which were ready, so `lps_reliability` can measure the
+    health of the make-ready process over time.
+    """
+    return _serialize(lps.snapshot_lookahead(_project(), weeks, from_date))
+
+
+@mcp.tool()
 def lps_add_commitment(
     week: str,
     task_uid: int,
     committed_by: str | None = None,
     promised_hours: float | None = None,
+    allow_constrained: bool = False,
 ) -> str:
     """Add a task commitment to a weekly work plan.
+
+    Only constraint-free tasks may enter the WWP (shielding production).
+    Tasks with open constraints are rejected unless `allow_constrained=true`
+    is passed as a deliberate override — the risk is recorded on the
+    commitment.
 
     Args:
         week: ISO week 'YYYY-Www' (e.g. '2025-W03').
         task_uid: Task UID.
         committed_by: Team or person making the commitment.
         promised_hours: Hours promised by the team for the week.
+        allow_constrained: Explicit override to commit despite open constraints.
     """
     return _serialize(
-        lps.add_commitment(_project(), week, task_uid, committed_by, promised_hours)
+        lps.add_commitment(
+            _project(), week, task_uid, committed_by, promised_hours, allow_constrained
+        )
     )
 
 
@@ -910,6 +1067,7 @@ def lps_mark_complete(
     complete: bool,
     actual_hours: float | None = None,
     variance_reason: str | None = None,
+    corrective_action: str | None = None,
 ) -> str:
     """Close a commitment at week end.
 
@@ -917,10 +1075,65 @@ def lps_mark_complete(
     weather | design_change | material_delay | labor_unavailable |
     equipment_breakdown | rework | permit | prerequisite_incomplete |
     scope_change | other.
+
+    Optionally record a `corrective_action` — what will be done so the same
+    variance does not repeat (closes the PDCA loop).
     """
     return _serialize(
-        lps.mark_complete(_project(), week, task_uid, complete, actual_hours, variance_reason)
+        lps.mark_complete(
+            _project(), week, task_uid, complete, actual_hours,
+            variance_reason, corrective_action,
+        )
     )
+
+
+@mcp.tool()
+def lps_log_daily(
+    week: str,
+    task_uid: int,
+    note: str,
+    day: str | None = None,
+    blocked: bool = False,
+) -> str:
+    """Log a daily-huddle entry against a committed task (LPS level 5).
+
+    Args:
+        week: ISO week 'YYYY-Www' of the WWP.
+        task_uid: Committed task the note refers to.
+        note: What happened today (progress, issue, decision).
+        day: ISO 'YYYY-MM-DD'; defaults to today.
+        blocked: Set true if the task hit a new blocker — surfaces early.
+    """
+    return _serialize(lps.log_daily(_project(), week, task_uid, note, day, blocked))
+
+
+@mcp.tool()
+def lps_get_daily_log(week: str, day: str | None = None) -> str:
+    """Get daily-huddle entries for a week, optionally filtered by day."""
+    return _serialize(lps.get_daily_log(_project(), week, day))
+
+
+@mcp.tool()
+def lps_workable_backlog(week: str | None = None, weeks: int = 6) -> str:
+    """List ready tasks not yet committed — the fallback buffer for the week.
+
+    A healthy WWP keeps a workable backlog: sound tasks crews can pull if a
+    committed task stalls. Defaults to the current ISO week.
+    """
+    return _serialize(lps.workable_backlog(_project(), week, weeks))
+
+
+@mcp.tool()
+def lps_reliability(weeks_back: int = 4) -> str:
+    """Compute TA and TMR — health of the make-ready process.
+
+    TA (Tasks Anticipated): % of committed tasks that a prior lookahead
+    snapshot saw coming. TMR (Tasks Made Ready): % of tasks anticipated for
+    a week that actually got committed. PPC measures promise-keeping; TA/TMR
+    measure the planning system upstream. Requires `lps_snapshot_lookahead`
+    at each weekly review.
+    """
+    return _serialize(lps.reliability(_project(), weeks_back))
 
 
 @mcp.tool()

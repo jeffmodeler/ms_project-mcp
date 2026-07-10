@@ -214,3 +214,160 @@ def test_export_wpr_includes_cwa_cwp_tasks(project: mspdi.Project) -> None:
 def test_export_wpr_unknown_cwp(project: mspdi.Project) -> None:
     result = awp.export_wpr(project, "CWP-DOES-NOT-EXIST")
     assert "error" in result
+
+
+# ---------------------------------------------------------------- EWP / PWP
+
+
+def _basic_cwp(project: mspdi.Project) -> None:
+    awp.upsert_cwa(project, "CWA-01", "Fundações")
+    awp.upsert_cwp(project, "CWP-01", "Bloco A", "CWA-01")
+
+
+def test_upsert_ewp_requires_existing_cwp(project: mspdi.Project) -> None:
+    result = awp.upsert_ewp(project, "EWP-01", "Desenhos", "CWP-GHOST")
+    assert "error" in result
+
+
+def test_ewp_lifecycle(project: mspdi.Project) -> None:
+    _basic_cwp(project)
+    created = awp.upsert_ewp(
+        project, "EWP-01", "Desenhos fôrmas", "CWP-01",
+        discipline="civil", status="planned",
+    )
+    assert created["action"] == "created"
+    updated = awp.upsert_ewp(
+        project, "EWP-01", "Desenhos fôrmas", "CWP-01",
+        discipline="civil", status="issued", issue_date="2026-01-02",
+    )
+    assert updated["ewp"]["status"] == "issued"
+    assert awp.list_ewp(project, cwp_id="CWP-01")["count"] == 1
+
+
+def test_pwp_rejects_invalid_status(project: mspdi.Project) -> None:
+    _basic_cwp(project)
+    result = awp.upsert_pwp(project, "PWP-01", "Aço", "CWP-01", status="xpto")
+    assert "error" in result
+
+
+def test_readiness_blocks_on_pending_ewp_pwp(project: mspdi.Project) -> None:
+    _basic_cwp(project)
+    awp.upsert_ewp(project, "EWP-01", "Desenhos", "CWP-01", status="in-progress")
+    awp.upsert_pwp(project, "PWP-01", "Aço CA-50", "CWP-01", status="ordered")
+    result = awp.readiness_check(project, "CWP-01")
+    assert result["ready"] is False
+    assert result["missing"]["engineering"] == ["EWP-01"]
+    assert result["missing"]["procurement"] == ["PWP-01"]
+
+
+def test_readiness_passes_when_issued_and_delivered(project: mspdi.Project) -> None:
+    _basic_cwp(project)
+    awp.upsert_ewp(project, "EWP-01", "Desenhos", "CWP-01", status="issued")
+    awp.upsert_pwp(project, "PWP-01", "Aço", "CWP-01", status="delivered")
+    result = awp.readiness_check(project, "CWP-01")
+    assert result["ready"] is True
+
+
+# ---------------------------------------------------------------- IWP release gate
+
+
+def _cwp_with_iwps(project: mspdi.Project) -> str:
+    _basic_cwp(project)
+    for uid in (1, 2, 3):
+        awp.assign_task_to_cwp(project, task_uid=uid, cwp_id="CWP-01")
+    generated = awp.generate_iwps(project, "CWP-01", max_hours_per_iwp=16.0)
+    return generated["iwp"][0]["id"]
+
+
+def test_release_iwp_blocked_without_readiness_check(project: mspdi.Project) -> None:
+    iwp_id = _cwp_with_iwps(project)
+    result = awp.release_iwp(project, iwp_id)
+    assert result["released"] is False
+    assert "readiness" in result["error"]
+
+
+def test_release_iwp_blocked_when_not_ready(project: mspdi.Project) -> None:
+    iwp_id = _cwp_with_iwps(project)
+    awp.upsert_ewp(project, "EWP-01", "Desenhos", "CWP-01", status="planned")
+    awp.readiness_check(project, "CWP-01")
+    result = awp.release_iwp(project, iwp_id)
+    assert result["released"] is False
+    assert "engineering" in result["missing"]
+
+
+def test_release_iwp_after_passing_readiness(project: mspdi.Project) -> None:
+    iwp_id = _cwp_with_iwps(project)
+    awp.readiness_check(project, "CWP-01")  # no requirements → ready
+    result = awp.release_iwp(project, iwp_id)
+    assert result["released"] is True
+    assert result["iwp"]["status"] == "released"
+    assert result["iwp"]["released_date"] is not None
+
+
+# ---------------------------------------------------------------- IWP progress
+
+
+def test_update_progress_requires_release(project: mspdi.Project) -> None:
+    iwp_id = _cwp_with_iwps(project)
+    result = awp.update_iwp_progress(project, iwp_id, 50)
+    assert "error" in result
+
+
+def test_update_progress_earns_hours_and_completes(project: mspdi.Project) -> None:
+    iwp_id = _cwp_with_iwps(project)
+    awp.readiness_check(project, "CWP-01")
+    awp.release_iwp(project, iwp_id)
+    half = awp.update_iwp_progress(project, iwp_id, 50)
+    assert half["iwp"]["earned_hours"] == pytest.approx(
+        half["iwp"]["labor_hours"] * 0.5
+    )
+    done = awp.update_iwp_progress(project, iwp_id, 100)
+    assert done["iwp"]["status"] == "complete"
+
+
+def test_update_progress_validates_range(project: mspdi.Project) -> None:
+    iwp_id = _cwp_with_iwps(project)
+    assert "error" in awp.update_iwp_progress(project, iwp_id, 150)
+
+
+# ---------------------------------------------------------------- IWP regeneration safety
+
+
+def test_generate_iwps_preserves_released(project: mspdi.Project) -> None:
+    iwp_id = _cwp_with_iwps(project)
+    awp.readiness_check(project, "CWP-01")
+    awp.release_iwp(project, iwp_id)
+    regenerated = awp.generate_iwps(project, "CWP-01", max_hours_per_iwp=16.0)
+    assert iwp_id in regenerated["preserved"]
+    payload = sidecar.load_awp(project.source_path)
+    released = next(i for i in payload["iwp"] if i["id"] == iwp_id)
+    assert released["status"] == "released"
+    # Tasks of the released IWP must not be regrouped into new IWPs
+    released_uids = set(released["task_uids"])
+    for iwp in regenerated["iwp"]:
+        assert released_uids.isdisjoint(iwp["task_uids"])
+
+
+# ---------------------------------------------------------------- Manual PoC
+
+
+def test_set_path_of_construction_validates_ids(project: mspdi.Project) -> None:
+    _basic_cwp(project)
+    result = awp.set_path_of_construction(project, ["CWP-01", "CWP-GHOST"])
+    assert "error" in result
+
+
+def test_manual_poc_overrides_schedule_order(project: mspdi.Project) -> None:
+    awp.upsert_cwa(project, "CWA-01", "A")
+    awp.upsert_cwp(project, "CWP-EARLY", "Early", "CWA-01")
+    awp.upsert_cwp(project, "CWP-LATE", "Late", "CWA-01")
+    awp.assign_task_to_cwp(project, task_uid=1, cwp_id="CWP-EARLY")
+    awp.assign_task_to_cwp(project, task_uid=4, cwp_id="CWP-LATE")
+    derived = awp.path_of_construction(project)
+    assert derived["mode"] == "derived-from-schedule"
+    # Construction team decides LATE goes first
+    awp.set_path_of_construction(project, ["CWP-LATE", "CWP-EARLY"])
+    planned = awp.path_of_construction(project)
+    assert planned["mode"] == "planned"
+    ids = [r["cwp_id"] for r in planned["sequence"]]
+    assert ids.index("CWP-LATE") < ids.index("CWP-EARLY")

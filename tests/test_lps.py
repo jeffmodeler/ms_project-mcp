@@ -209,3 +209,147 @@ def test_ppc_series(project: mspdi.Project) -> None:
 def test_ppc_empty_state(project: mspdi.Project) -> None:
     result = lps.calculate_ppc(project)
     assert result["series"] == []
+
+
+# ------------------------------------------------- Shielding production gate
+
+
+def test_add_commitment_blocks_constrained_task(project: mspdi.Project) -> None:
+    lps.register_constraint(project, task_uid=1, constraint_type="material", description="aço")
+    result = lps.add_commitment(project, "2026-W02", task_uid=1)
+    assert "error" in result
+    assert len(result["open_constraints"]) == 1
+
+
+def test_add_commitment_override_records_risk(project: mspdi.Project) -> None:
+    lps.register_constraint(project, task_uid=1, constraint_type="material", description="aço")
+    result = lps.add_commitment(project, "2026-W02", task_uid=1, allow_constrained=True)
+    assert result["action"] == "added"
+    assert result["commitment"]["constrained_override"] is True
+    assert "warning" in result
+
+
+def test_add_commitment_allowed_after_clearing(project: mspdi.Project) -> None:
+    reg = lps.register_constraint(
+        project, task_uid=1, constraint_type="material", description="aço"
+    )
+    lps.clear_constraint(project, reg["constraint"]["id"])
+    result = lps.add_commitment(project, "2026-W02", task_uid=1)
+    assert result["action"] == "added"
+    assert result["commitment"]["constrained_override"] is False
+
+
+def test_add_commitment_rejects_bad_week_format(project: mspdi.Project) -> None:
+    result = lps.add_commitment(project, "semana 2", task_uid=1)
+    assert "error" in result
+
+
+# ------------------------------------------------- Late-constraint alert
+
+
+def test_lookahead_flags_constraint_due_after_task_start(project: mspdi.Project) -> None:
+    # Fixture task 1 starts 2026-01-05; constraint promised only for Feb
+    reg = lps.register_constraint(
+        project, task_uid=1, constraint_type="material",
+        description="aço", due_date="2026-02-10",
+    )
+    result = lps.lookahead(project, weeks=8, from_date="2026-01-01")
+    task = next(t for t in result["tasks"] if t["task_uid"] == 1)
+    assert reg["constraint"]["id"] in task["late_constraint_ids"]
+    assert result["late_constraint_task_count"] >= 1
+
+
+def test_lookahead_no_late_flag_when_due_before_start(project: mspdi.Project) -> None:
+    lps.register_constraint(
+        project, task_uid=1, constraint_type="material",
+        description="aço", due_date="2026-01-02",
+    )
+    result = lps.lookahead(project, weeks=8, from_date="2026-01-01")
+    task = next(t for t in result["tasks"] if t["task_uid"] == 1)
+    assert task["late_constraint_ids"] == []
+
+
+# ------------------------------------------------- Snapshots + TA/TMR
+
+
+def test_snapshot_lookahead_persists(project: mspdi.Project) -> None:
+    result = lps.snapshot_lookahead(project, weeks=8, from_date="2026-01-01")
+    assert result["anticipated_count"] >= 1
+    payload = sidecar.load_lps(project.source_path)
+    assert len(payload["lookahead_snapshots"]) == 1
+
+
+def test_reliability_requires_snapshots(project: mspdi.Project) -> None:
+    result = lps.reliability(project)
+    assert result["series"] == []
+    assert "note" in result
+
+
+def test_reliability_computes_ta_tmr(project: mspdi.Project) -> None:
+    # Snapshot taken 2026-01-01 anticipates fixture tasks starting 2026-01-05 (W02)
+    lps.snapshot_lookahead(project, weeks=8, from_date="2026-01-01")
+    lps.add_commitment(project, "2026-W02", task_uid=1)
+    result = lps.reliability(project, weeks_back=4)
+    assert result["weeks_included"] == 1
+    week = result["series"][0]
+    assert week["week"] == "2026-W02"
+    assert week["ta_percent"] == 100.0  # committed task was anticipated
+    assert week["tmr_percent"] is not None
+
+
+# ------------------------------------------------- Workable backlog
+
+
+def test_workable_backlog_excludes_committed(project: mspdi.Project) -> None:
+    lps.add_commitment(project, "2026-W02", task_uid=1)
+    result = lps.workable_backlog(project, week="2026-W02", weeks=8)
+    uids = [t["task_uid"] for t in result["backlog"]]
+    assert 1 not in uids
+    assert result["committed_count"] == 1
+
+
+# ------------------------------------------------- Daily huddle
+
+
+def test_log_daily_and_get(project: mspdi.Project) -> None:
+    lps.add_commitment(project, "2026-W02", task_uid=1)
+    logged = lps.log_daily(
+        project, "2026-W02", task_uid=1,
+        note="Formas 60% concluídas", day="2026-01-06", blocked=False,
+    )
+    assert logged["logged"] is True
+    log = lps.get_daily_log(project, "2026-W02")
+    assert log["entry_count"] == 1
+    assert log["blocked_count"] == 0
+    filtered = lps.get_daily_log(project, "2026-W02", day="2026-01-07")
+    assert filtered["entry_count"] == 0
+
+
+def test_log_daily_requires_commitment(project: mspdi.Project) -> None:
+    lps.add_commitment(project, "2026-W02", task_uid=1)
+    result = lps.log_daily(project, "2026-W02", task_uid=2, note="x")
+    assert "error" in result
+
+
+# ------------------------------------------------- Pull-plan annotations
+
+
+def test_annotate_pull_plan_handoff(project: mspdi.Project) -> None:
+    lps.upsert_phase(project, "PH-01", "Fase")
+    lps.set_pull_plan(project, "PH-01", task_uids=[1, 2])
+    result = lps.annotate_pull_plan(
+        project, "PH-01", task_uid=1,
+        handoff_to="equipe-alvenaria",
+        conditions_of_satisfaction="Fundação curada e liberada pela fiscalização",
+    )
+    assert result["annotated"] is True
+    plan = lps.get_pull_plan(project, "PH-01")
+    entry = next(e for e in plan["pull_plan"] if e["task_uid"] == 1)
+    assert entry["handoff_to"] == "equipe-alvenaria"
+
+
+def test_annotate_pull_plan_unknown_entry(project: mspdi.Project) -> None:
+    lps.upsert_phase(project, "PH-01", "Fase")
+    lps.set_pull_plan(project, "PH-01", task_uids=[1])
+    result = lps.annotate_pull_plan(project, "PH-01", task_uid=3, handoff_to="x")
+    assert "error" in result

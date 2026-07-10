@@ -80,8 +80,8 @@ Adicione ao seu `claude_desktop_config.json`:
 }
 ```
 
-Reinicie o Claude Desktop. As 36 tools ficam disponíveis em qualquer conversa
-(14 do núcleo MS Project + 10 AWP + 12 LPS).
+Reinicie o Claude Desktop. As 49 tools ficam disponíveis em qualquer conversa
+(14 do núcleo MS Project + 17 AWP + 18 LPS).
 
 ## Tools disponíveis
 
@@ -127,22 +127,45 @@ Liste as 5 tarefas com maior variação de baseline.
 Exporte o projeto completo para C:\relatorios\obra-acme.json
 ```
 
+## Duas camadas, separadas por design
+
+AWP e LPS vivem no mesmo servidor mas operam como **camadas independentes**
+sobre o mesmo cronograma. Persistem em arquivos sidecar separados
+(`awp.json` e `lps.json`), não compartilham estado e nenhuma depende da outra:
+
+- **AWP** organiza o *escopo*: o que será construído, onde, e em qual pacote
+  (CWA → CWP → IWP, alimentado por pacotes de engenharia e suprimentos).
+- **LPS** organiza o *fluxo de compromissos*: o que as equipes prometem
+  semana a semana, o que as bloqueia e quão confiável é o planejamento.
+
+Você pode usar só uma das camadas, ou as duas lado a lado no mesmo `.mpp`.
+São metodologias complementares — AWP responde "o pacote está pronto para
+ser liberado?", LPS responde "a equipe vai realmente executar esta semana?" —
+mas neste servidor operam de forma independente, por decisão de projeto.
+
 ## AWP — Advanced Work Packaging ✅
 
-Metodologia do **Construction Industry Institute (CII)** que estrutura a
-execução em pacotes de trabalho alinhados entre engenharia, compras e campo.
+Metodologia do **Construction Industry Institute (CII RT-272 / RT-319)** que
+estrutura a execução em pacotes de trabalho alinhados entre engenharia,
+compras e campo.
 
 ```
 CWA (Construction Work Area) → CWP (Construction Work Package)
                                      ↓
                                IWP (Installation Work Package)
-                    EWP (Engineering WP) + PWP (Procurement WP)
+
+EWP (Engineering Work Package) ─┐
+                                ├→ condicionam readiness do CWP
+PWP (Procurement Work Package) ─┘
 ```
 
-Foco: **path of construction** + **readiness** (nada começa no canteiro sem
-materiais, documentação e acessos disponíveis).
+Foco: **path of construction** como *input* de planejamento + **liberação
+livre de restrições**. Um CWP só está ready quando os requisitos manuais
+estão disponíveis, todos os EWPs vinculados estão `issued` e todos os PWPs
+`delivered`. IWPs só são **liberados ao campo após readiness check aprovado**
+— a regra de ouro do WorkFace Planning.
 
-### Tools AWP (10)
+### Tools AWP (17)
 
 | Tool | Finalidade |
 |---|---|
@@ -152,24 +175,39 @@ materiais, documentação e acessos disponíveis).
 | `awp_upsert_cwp` | Cria ou atualiza um CWP (status: planned/ready/in-progress/complete/on-hold) |
 | `awp_assign_task_to_cwp` | Vincula tarefa a um CWP (move de outro se necessário) |
 | `awp_set_cwp_requirements` | Define requisitos do CWP (materiais, documentos, acessos) |
-| `awp_readiness_check` | Verifica se um CWP está pronto — compara requisitos vs disponíveis |
-| `awp_path_of_construction` | Sequencia CWPs por data de início com contagem de tarefas críticas |
-| `awp_generate_iwps` | Quebra um CWP em IWPs limitados por horas de trabalho |
+| `awp_upsert_ewp` | Cria/atualiza Engineering Work Package (planned/in-progress/issued) |
+| `awp_list_ewp` | Lista EWPs, opcionalmente por CWP |
+| `awp_upsert_pwp` | Cria/atualiza Procurement Work Package (planned/ordered/delivered) |
+| `awp_list_pwp` | Lista PWPs, opcionalmente por CWP |
+| `awp_readiness_check` | Readiness do CWP: requisitos + EWPs issued + PWPs delivered. Condiciona liberação de IWP |
+| `awp_set_path_of_construction` | Define o PoC como input de planejamento (ordem decidida pela construção) |
+| `awp_path_of_construction` | Retorna o PoC — ordem manual se definida, senão derivada do cronograma |
+| `awp_generate_iwps` | Quebra CWP em IWPs (default 500h — dimensionamento CII de crew-semana; grava disciplina/crew; preserva IWPs liberados) |
+| `awp_release_iwp` | Libera IWP ao campo — **bloqueado se o CWP não passou no readiness check** |
+| `awp_update_iwp_progress` | Avanço de campo 0-100% com horas ganhas; 100% marca complete |
 | `awp_export_wpr` | Gera Work Package Release — JSON auto-contido pro canteiro |
 
 ## LPS — Last Planner System ✅
 
-Método de **Lean Construction** com 5 níveis de planejamento.
+Método de **Lean Construction** com 5 níveis de planejamento — todos
+implementados.
 
 ```
 Master → Phase (pull plan) → Lookahead (N semanas, remove restrições)
                               → WWP (Weekly Work Plan) → Daily huddle
 ```
 
-Métrica principal: **PPC** (Percent Plan Complete) — compromissos cumpridos /
-compromissos assumidos.
+**Regra central aplicada (shielding production, Ballard 1998):** só tarefa
+livre de restrições entra no Weekly Work Plan. `lps_add_commitment` rejeita
+tarefas com restrições abertas, salvo override explícito — registrado no
+compromisso como risco.
 
-### Tools LPS (12)
+**Métricas**: **PPC** (Percent Plan Complete — promessas cumpridas), mais
+**TA** (Tasks Anticipated) e **TMR** (Tasks Made Ready) calculadas a partir
+de snapshots do lookahead — medem a saúde do processo de make-ready, não só
+a confiabilidade da última semana.
+
+### Tools LPS (18)
 
 | Tool | Finalidade |
 |---|---|
@@ -177,13 +215,19 @@ compromissos assumidos.
 | `lps_upsert_phase` | Cria ou atualiza uma fase (PH-01, datas início/fim) |
 | `lps_set_pull_plan` | Define sequência reversa (pull planning) com UIDs de tarefas |
 | `lps_get_pull_plan` | Retorna pull plan de uma fase |
+| `lps_annotate_pull_plan` | Registra handoff + condições de satisfação em entrada do pull plan |
 | `lps_register_constraint` | Registra restrição (material/document/labor/equipment/access/permit/…) |
 | `lps_clear_constraint` | Marca restrição como resolvida |
 | `lps_list_constraints` | Lista com filtros por task, status, tipo |
-| `lps_lookahead` | Janela de N semanas com tarefas ready/blocked por restrições |
-| `lps_add_commitment` | Adiciona compromisso a um Weekly Work Plan (ISO week `2026-W03`) |
-| `lps_mark_complete` | Fecha compromisso com `actual_hours` ou `variance_reason` |
+| `lps_lookahead` | Janela de N semanas com ready/blocked + alerta de restrição atrasada (`due_date` após início da tarefa) |
+| `lps_snapshot_lookahead` | Persiste snapshot do lookahead — alimenta TA/TMR. Rodar a cada revisão semanal |
+| `lps_add_commitment` | Adiciona compromisso — **bloqueia tarefa com restrição aberta** (override: `allow_constrained`) |
+| `lps_mark_complete` | Fecha compromisso com `variance_reason` + `corrective_action` opcional (PDCA) |
+| `lps_log_daily` | Registro do daily huddle contra tarefa comprometida (nível 5) |
+| `lps_get_daily_log` | Lê registros diários de uma semana |
 | `lps_get_wwp` | Lê WWP de uma semana |
+| `lps_workable_backlog` | Tarefas ready não comprometidas — buffer reserva da semana |
+| `lps_reliability` | Série TA / TMR — saúde do processo de make-ready |
 | `lps_ppc` | Calcula PPC de uma semana ou série das últimas N semanas |
 
 **Tipos de restrição aceitos**: `material`, `document`, `information`, `design`,
@@ -203,8 +247,8 @@ Project não representa bem:
 C:\cronogramas\
 ├── obra-acme.mpp              ← fonte mestre (nunca modificada)
 └── obra-acme.awp/             ← sidecar criado automaticamente
-    ├── awp.json               ← CWA / CWP / IWP
-    └── lps.json               ← phases, pull plans, constraints, WWPs
+    ├── awp.json               ← CWA / CWP / IWP / EWP / PWP + path of construction
+    └── lps.json               ← phases, pull plans, constraints, WWPs, snapshots
 ```
 
 Cada tool de escrita atualiza `updated_at` (ISO 8601 UTC) no JSON.

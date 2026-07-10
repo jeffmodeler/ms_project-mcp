@@ -80,8 +80,8 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-Restart Claude Desktop. The 36 tools become available in any conversation
-(14 core MS Project + 10 AWP + 12 LPS).
+Restart Claude Desktop. The 49 tools become available in any conversation
+(14 core MS Project + 17 AWP + 18 LPS).
 
 ## Tools
 
@@ -127,19 +127,42 @@ List the 5 tasks with the largest baseline variance.
 Export the full project to C:\reports\obra-acme.json
 ```
 
+## Two layers, deliberately separate
+
+AWP and LPS live in the same server but operate as **independent layers** on
+top of the same schedule. They persist to separate sidecar files (`awp.json`
+and `lps.json`), share no state, and neither depends on the other:
+
+- **AWP** organizes *scope*: what gets built, where, and in which package
+  (CWA → CWP → IWP, fed by engineering and procurement packages).
+- **LPS** organizes *commitment flow*: what the crews promise week by week,
+  what blocks them, and how reliable the planning system is.
+
+You can use either layer alone, or both side by side on the same `.mpp`.
+They are complementary methodologies — AWP answers "is the work package
+ready to be released?", LPS answers "will the crew actually do it this
+week?" — but in this server they are operated independently, by design.
+
 ## AWP — Advanced Work Packaging
 
-Construction Industry Institute (CII) methodology. Breaks execution into
-aligned packages across engineering, procurement and field:
+Construction Industry Institute (CII RT-272 / RT-319) methodology. Breaks
+execution into aligned packages across engineering, procurement and field:
 
 ```
 CWA (Construction Work Area) → CWP (Construction Work Package)
                                      ↓
                                IWP (Installation Work Package)
+
+EWP (Engineering Work Package) ─┐
+                                ├→ gate CWP readiness
+PWP (Procurement Work Package) ─┘
 ```
 
-Focus: path of construction + readiness (nothing starts in the field until
-materials, documents and access are available).
+Focus: path of construction as a *planning input* + constraint-free release.
+A CWP is only ready when its manual requirements are available, all linked
+EWPs are `issued` and all linked PWPs are `delivered`. IWPs can only be
+**released to the field after a passing readiness check** — the WorkFace
+Planning golden rule.
 
 ### AWP tools
 
@@ -151,21 +174,36 @@ materials, documents and access are available).
 | `awp_upsert_cwp` | Create or update a CWP (status: planned/ready/in-progress/complete/on-hold) |
 | `awp_assign_task_to_cwp` | Link a task UID to a CWP (moves it if already elsewhere) |
 | `awp_set_cwp_requirements` | Set CWP requirements (materials, documents, access) |
-| `awp_readiness_check` | Check whether a CWP is ready — compares requirements vs available |
-| `awp_path_of_construction` | Sequence CWPs by earliest start, with critical-task counts |
-| `awp_generate_iwps` | Split a CWP into IWPs sized by labor hours |
+| `awp_upsert_ewp` | Create/update an Engineering Work Package (planned/in-progress/issued) |
+| `awp_list_ewp` | List EWPs, optionally by CWP |
+| `awp_upsert_pwp` | Create/update a Procurement Work Package (planned/ordered/delivered) |
+| `awp_list_pwp` | List PWPs, optionally by CWP |
+| `awp_readiness_check` | CWP readiness: requirements + EWPs issued + PWPs delivered. Gates IWP release |
+| `awp_set_path_of_construction` | Define the PoC as a planning input (construction team's decided order) |
+| `awp_path_of_construction` | Return the PoC — manual order if set, else derived from schedule |
+| `awp_generate_iwps` | Split a CWP into IWPs (default 500h — CII crew-week sizing; stamps discipline/crew; preserves released IWPs) |
+| `awp_release_iwp` | Release an IWP to the field — **blocked unless the CWP passed its readiness check** |
+| `awp_update_iwp_progress` | Field progress 0-100% with earned hours; 100% marks complete |
 | `awp_export_wpr` | Generate a Work Package Release — self-contained JSON for field teams |
 
 ## LPS — Last Planner System
 
-Lean Construction method with five planning levels:
+Lean Construction method with five planning levels — all implemented:
 
 ```
 Master → Phase (pull plan) → Lookahead (N weeks, clears constraints)
                               → WWP (Weekly Work Plan) → Daily huddle
 ```
 
-Key metric: **PPC** (Percent Plan Complete) — commitments kept / commitments made.
+**Core rule enforced (shielding production, Ballard 1998):** only
+constraint-free tasks enter the Weekly Work Plan. `lps_add_commitment`
+rejects tasks with open constraints unless explicitly overridden — and the
+override is recorded on the commitment as a risk.
+
+**Metrics**: **PPC** (Percent Plan Complete — promises kept), plus **TA**
+(Tasks Anticipated) and **TMR** (Tasks Made Ready) computed from lookahead
+snapshots — these measure whether the make-ready process upstream is healthy,
+not just last week's reliability.
 
 ### LPS tools
 
@@ -175,13 +213,19 @@ Key metric: **PPC** (Percent Plan Complete) — commitments kept / commitments m
 | `lps_upsert_phase` | Create or update a phase (with start/end dates) |
 | `lps_set_pull_plan` | Set execution sequence (pull planning) with task UIDs |
 | `lps_get_pull_plan` | Retrieve a phase's pull plan |
+| `lps_annotate_pull_plan` | Record handoff + conditions of satisfaction on a pull-plan entry |
 | `lps_register_constraint` | Register a constraint (material/document/labor/equipment/access/permit/…) |
 | `lps_clear_constraint` | Mark a constraint as resolved |
 | `lps_list_constraints` | List with filters by task, status, type |
-| `lps_lookahead` | N-week horizon with ready/blocked tasks (from open constraints) |
-| `lps_add_commitment` | Add a commitment to a weekly work plan (ISO week e.g. `2026-W03`) |
-| `lps_mark_complete` | Close a commitment with `actual_hours` or `variance_reason` |
+| `lps_lookahead` | N-week horizon with ready/blocked tasks + late-constraint alerts (`due_date` after task start) |
+| `lps_snapshot_lookahead` | Persist a lookahead snapshot — feeds TA/TMR. Call at every weekly review |
+| `lps_add_commitment` | Add a commitment — **blocks tasks with open constraints** (override: `allow_constrained`) |
+| `lps_mark_complete` | Close a commitment with `variance_reason` + optional `corrective_action` (PDCA) |
+| `lps_log_daily` | Daily-huddle entry against a committed task (level 5) |
+| `lps_get_daily_log` | Read daily-huddle entries for a week |
 | `lps_get_wwp` | Read a weekly work plan |
+| `lps_workable_backlog` | Ready-but-uncommitted tasks — the fallback buffer for the week |
+| `lps_reliability` | TA / TMR series — health of the make-ready process |
 | `lps_ppc` | Compute PPC for a single week or a series of the last N weeks |
 
 **Constraint types**: material, document, information, design, labor,
@@ -200,8 +244,8 @@ Project does not represent well:
 C:\schedules\
 ├── obra-acme.mpp              ← authoritative schedule (never modified)
 └── obra-acme.awp/             ← sidecar folder, created on demand
-    ├── awp.json               ← CWA / CWP / IWP hierarchy
-    └── lps.json               ← phases, pull plans, constraints, WWPs
+    ├── awp.json               ← CWA / CWP / IWP / EWP / PWP + path of construction
+    └── lps.json               ← phases, pull plans, constraints, WWPs, snapshots
 ```
 
 Every write updates `updated_at` (ISO 8601 UTC) in the JSON.
