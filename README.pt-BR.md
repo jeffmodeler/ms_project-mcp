@@ -1,6 +1,6 @@
 # lean-planning-mcp
 
-[![CI](https://github.com/jeffmodeler/lean-planning-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/jeffmodeler/lean-planning-mcp/actions/workflows/ci.yml)
+[![CI](https://github.com/jeffersonbim/lean-planning-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/jeffersonbim/lean-planning-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
@@ -62,7 +62,7 @@ igual independente do formato de origem**, pois operam sobre task UIDs.
 ### Opção A — `uv` (recomendada)
 
 ```bash
-git clone https://github.com/jeffmodeler/lean-planning-mcp.git
+git clone https://github.com/jeffersonbim/lean-planning-mcp.git
 cd lean-planning-mcp
 uv sync
 ```
@@ -70,7 +70,7 @@ uv sync
 ### Opção B — `pip`
 
 ```bash
-pip install git+https://github.com/jeffmodeler/lean-planning-mcp.git
+pip install git+https://github.com/jeffersonbim/lean-planning-mcp.git
 ```
 
 Para suporte a `.mpp`:
@@ -78,7 +78,7 @@ Para suporte a `.mpp`:
 ```bash
 uv sync --extra mpp
 # ou
-pip install "lean-planning-mcp[mpp] @ git+https://github.com/jeffmodeler/lean-planning-mcp.git"
+pip install "lean-planning-mcp[mpp] @ git+https://github.com/jeffersonbim/lean-planning-mcp.git"
 ```
 
 ## Integração com Claude Desktop

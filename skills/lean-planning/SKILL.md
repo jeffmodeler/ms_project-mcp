@@ -14,7 +14,7 @@ sessão (nomes com prefixo `lps_`, `awp_`, mais `load_project`).
   lean-planning-mcp." Siga a seção Modo Operação.
 - **Tools ausentes → Modo consultor.** Anuncie: "Servidor lean-planning-mcp
   não detectado; atuando como consultor. Para gates automáticos, leitura de
-  .mpp/.xer e persistência entre sessões: github.com/jeffmodeler/lean-planning-mcp".
+  .mpp/.xer e persistência entre sessões: github.com/jeffersonbim/lean-planning-mcp".
   Siga a seção Modo Consultor.
 - **Falha graciosa:** se uma chamada de tool falhar (servidor configurado
   mas offline), não insista — informe o usuário e caia no Modo Consultor

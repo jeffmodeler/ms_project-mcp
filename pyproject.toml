@@ -38,8 +38,8 @@ dev = [
 lean-planning-mcp = "lean_planning_mcp.server:main"
 
 [project.urls]
-Homepage = "https://github.com/jeffmodeler/lean-planning-mcp"
-Issues = "https://github.com/jeffmodeler/lean-planning-mcp/issues"
+Homepage = "https://github.com/jeffersonbim/lean-planning-mcp"
+Issues = "https://github.com/jeffersonbim/lean-planning-mcp/issues"
 
 [build-system]
 requires = ["hatchling"]
