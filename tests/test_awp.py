@@ -357,6 +357,57 @@ def test_set_path_of_construction_validates_ids(project: mspdi.Project) -> None:
     assert "error" in result
 
 
+def test_readiness_invalidated_when_requirements_change(project: mspdi.Project) -> None:
+    iwp_id = _cwp_with_iwps(project)
+    awp.readiness_check(project, "CWP-01")  # passes, gets cached
+    # New requirement appears after the check — cache must be dropped
+    awp.set_cwp_requirements(project, "CWP-01", materials=["concreto fck30"])
+    result = awp.release_iwp(project, iwp_id)
+    assert result["released"] is False
+
+
+def test_readiness_invalidated_when_ewp_changes(project: mspdi.Project) -> None:
+    iwp_id = _cwp_with_iwps(project)
+    awp.upsert_ewp(project, "EWP-01", "Desenhos", "CWP-01", status="issued")
+    awp.readiness_check(project, "CWP-01")
+    # Engineering regresses after the passing check
+    awp.upsert_ewp(project, "EWP-01", "Desenhos", "CWP-01", status="in-progress")
+    result = awp.release_iwp(project, iwp_id)
+    assert result["released"] is False
+
+
+def test_reassign_blocked_when_task_in_released_iwp(project: mspdi.Project) -> None:
+    iwp_id = _cwp_with_iwps(project)
+    awp.readiness_check(project, "CWP-01")
+    released = awp.release_iwp(project, iwp_id)
+    task_in_released = released["iwp"]["task_uids"][0]
+    awp.upsert_cwp(project, "CWP-02", "Outro pacote", "CWA-01")
+    result = awp.assign_task_to_cwp(project, task_in_released, "CWP-02")
+    assert "error" in result
+    assert iwp_id in result["error"]
+
+
+def test_reassign_removes_task_from_planned_iwps(project: mspdi.Project) -> None:
+    _cwp_with_iwps(project)  # IWPs still 'planned'
+    awp.upsert_cwp(project, "CWP-02", "Outro pacote", "CWA-01")
+    moved = awp.assign_task_to_cwp(project, 1, "CWP-02")
+    assert moved["assigned"] is True
+    payload = sidecar.load_awp(project.source_path)
+    for iwp in payload["iwp"]:
+        if iwp["cwp_id"] == "CWP-01":
+            assert 1 not in iwp["task_uids"]
+
+
+def test_progress_reduction_reverts_complete_status(project: mspdi.Project) -> None:
+    iwp_id = _cwp_with_iwps(project)
+    awp.readiness_check(project, "CWP-01")
+    awp.release_iwp(project, iwp_id)
+    awp.update_iwp_progress(project, iwp_id, 100)
+    corrected = awp.update_iwp_progress(project, iwp_id, 80)
+    assert corrected["iwp"]["status"] == "released"
+    assert corrected["iwp"]["percent_complete"] == 80
+
+
 def test_manual_poc_overrides_schedule_order(project: mspdi.Project) -> None:
     awp.upsert_cwa(project, "CWA-01", "A")
     awp.upsert_cwp(project, "CWP-EARLY", "Early", "CWA-01")

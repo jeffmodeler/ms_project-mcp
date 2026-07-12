@@ -62,6 +62,17 @@ def _find_pwp(payload: dict[str, Any], pwp_id: str) -> dict[str, Any] | None:
     return next((p for p in payload["pwp"] if p["id"] == pwp_id), None)
 
 
+def _invalidate_readiness(payload: dict[str, Any], cwp_id: str | None) -> None:
+    """Drop a CWP's cached readiness result after anything it depends on
+    changes (requirements, EWP or PWP status). Forces a fresh
+    readiness_check before any IWP release."""
+    if not cwp_id:
+        return
+    cwp = _find_cwp(payload, cwp_id)
+    if cwp is not None:
+        cwp.pop("last_readiness", None)
+
+
 def _task_to_cwp_map(payload: dict[str, Any]) -> dict[int, str]:
     """Reverse index: task_uid -> cwp_id."""
     mapping: dict[int, str] = {}
@@ -184,6 +195,20 @@ def assign_task_to_cwp(
     cwp = _find_cwp(payload, cwp_id)
     if cwp is None:
         return {"error": f"CWP '{cwp_id}' does not exist."}
+    # A task inside an IWP that already left planning cannot be moved — the
+    # field package would keep claiming work that now belongs elsewhere.
+    locked = [
+        i["id"] for i in payload["iwp"]
+        if i.get("cwp_id") != cwp_id
+        and i.get("status") != "planned"
+        and task_uid in i.get("task_uids", [])
+    ]
+    if locked:
+        return {
+            "error": f"Task UID {task_uid} belongs to IWP(s) already released or "
+                     f"in progress: {locked}. Complete or revise those IWPs before "
+                     "reassigning the task.",
+        }
     # Remove this task from any other CWP it might be assigned to
     reassigned_from: str | None = None
     for other in payload["cwp"]:
@@ -192,6 +217,11 @@ def assign_task_to_cwp(
         if task_uid in other.get("task_uids", []):
             other["task_uids"].remove(task_uid)
             reassigned_from = other["id"]
+    # Also drop it from planned IWPs of other CWPs so they don't keep a
+    # stale reference to a task that moved away.
+    for iwp in payload["iwp"]:
+        if iwp.get("cwp_id") != cwp_id and task_uid in iwp.get("task_uids", []):
+            iwp["task_uids"].remove(task_uid)
     task_uids: list[int] = cwp.setdefault("task_uids", [])
     if task_uid not in task_uids:
         task_uids.append(task_uid)
@@ -230,6 +260,7 @@ def set_cwp_requirements(
         reqs["documents"] = documents
     if access is not None:
         reqs["access"] = access
+    _invalidate_readiness(payload, cwp_id)
     sidecar.save_awp(project.source_path, payload)
     return {"cwp_id": cwp_id, "requirements": reqs}
 
@@ -326,6 +357,7 @@ def upsert_ewp(
     if _find_cwp(payload, cwp_id) is None:
         return {"error": f"CWP '{cwp_id}' does not exist. Create it first with upsert_cwp."}
     existing = _find_ewp(payload, ewp_id)
+    previous_cwp = existing.get("cwp_id") if existing else None
     record = {
         "id": ewp_id,
         "name": name,
@@ -341,6 +373,9 @@ def upsert_ewp(
         existing.update(record)
         record = existing
         action = "updated"
+    _invalidate_readiness(payload, cwp_id)
+    if previous_cwp and previous_cwp != cwp_id:
+        _invalidate_readiness(payload, previous_cwp)
     sidecar.save_awp(project.source_path, payload)
     return {"action": action, "ewp": record}
 
@@ -378,6 +413,7 @@ def upsert_pwp(
     if _find_cwp(payload, cwp_id) is None:
         return {"error": f"CWP '{cwp_id}' does not exist. Create it first with upsert_cwp."}
     existing = _find_pwp(payload, pwp_id)
+    previous_cwp = existing.get("cwp_id") if existing else None
     record = {
         "id": pwp_id,
         "name": name,
@@ -395,6 +431,9 @@ def upsert_pwp(
         existing.update(record)
         record = existing
         action = "updated"
+    _invalidate_readiness(payload, cwp_id)
+    if previous_cwp and previous_cwp != cwp_id:
+        _invalidate_readiness(payload, previous_cwp)
     sidecar.save_awp(project.source_path, payload)
     return {"action": action, "pwp": record}
 
@@ -677,6 +716,9 @@ def update_iwp_progress(
         )
     if percent_complete == 100:
         iwp["status"] = "complete"
+    elif iwp.get("status") == "complete":
+        # Progress corrected downwards — the IWP is no longer complete.
+        iwp["status"] = "released"
     sidecar.save_awp(project.source_path, payload)
     return {"updated": True, "iwp": iwp}
 
